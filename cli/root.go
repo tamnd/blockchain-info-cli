@@ -1,10 +1,10 @@
-// Package cli assembles the blockchain-info command tree from the blockchain-info
+// Package cli assembles the blockchain-info command tree from the blockchaininfo
 // domain on top of the any-cli/kit framework.
 package cli
 
 import (
 	"github.com/tamnd/any-cli/kit"
-	"github.com/tamnd/blockchain-info-cli/blockchain-info"
+	blockchaininfo "github.com/tamnd/blockchain-info-cli/blockchain-info"
 )
 
 // Build metadata, set via -ldflags at release time.
@@ -14,7 +14,7 @@ var (
 	Date    = "unknown"
 )
 
-// NewApp assembles the kit application from the blockchain-info domain. The
+// NewApp assembles the kit application from the blockchaininfo domain. The
 // domain's Register installs the client factory and every operation, so the
 // binary and a host (ant, which blank-imports the package) share one source of
 // truth. kit.Run turns the App into the CLI, plus the serve and mcp surfaces and
@@ -24,11 +24,11 @@ var (
 // appears here automatically. Reach for app.AddCommand only for a verb that does
 // not fit the emit-records shape, the way version does below.
 func NewApp() *kit.App {
-	id := blockchain-info.Domain{}.Info().Identity
+	id := blockchaininfo.Domain{}.Info().Identity
 	id.Version = Version
 
 	app := kit.New(id)
-	(blockchain-info.Domain{}).Register(app)
+	(blockchaininfo.Domain{}).Register(app)
 	app.AddCommand(newVersionCmd())
 	return app
 }

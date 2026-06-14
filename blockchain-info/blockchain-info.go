@@ -1,35 +1,29 @@
-// Package blockchain-info is the library behind the blockchain-info command line:
-// the HTTP client, request shaping, and the typed data models for blockchain-info.
+// Package blockchaininfo is the library behind the blockchain-info command line:
+// the HTTP client, request shaping, and the typed data models for blockchain.info.
 //
 // The Client here is the spine every command shares. It sets a real
 // User-Agent, paces requests so a busy session stays polite, and retries the
 // transient failures (429 and 5xx) that any public site throws under load.
-// Build your endpoint calls and JSON decoding on top of it.
-package blockchain-info
+package blockchaininfo
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"strings"
 	"time"
 )
 
-// DefaultUserAgent identifies the client to blockchain-info. A real, honest
-// User-Agent is both polite and the thing most likely to keep you unblocked.
-const DefaultUserAgent = "blockchain-info/dev (+https://github.com/tamnd/blockchain-info-cli)"
+// DefaultUserAgent identifies the client to blockchain.info.
+const DefaultUserAgent = "blockchain-info-cli/dev (+https://github.com/tamnd/blockchain-info-cli)"
 
-// Host is the site this client talks to, and the host the URI driver in
-// domain.go claims. The scaffold points it at blockchain-info.com; change it once you
-// know the real endpoints you want to read.
-const Host = "blockchain-info.com"
+// Host is the site this client talks to.
+const Host = "blockchain.info"
 
 // BaseURL is the root every request is built from.
 const BaseURL = "https://" + Host
 
-// Client talks to blockchain-info over HTTP.
+// Client talks to blockchain.info over HTTP.
 type Client struct {
 	HTTP      *http.Client
 	UserAgent string
@@ -40,13 +34,13 @@ type Client struct {
 	last time.Time
 }
 
-// NewClient returns a Client with sensible defaults: a 30s timeout, a 200ms
+// NewClient returns a Client with sensible defaults: a 30s timeout, a 500ms
 // minimum gap between requests, and five retries on transient errors.
 func NewClient() *Client {
 	return &Client{
 		HTTP:      &http.Client{Timeout: 30 * time.Second},
 		UserAgent: DefaultUserAgent,
-		Rate:      200 * time.Millisecond,
+		Rate:      500 * time.Millisecond,
 		Retries:   5,
 	}
 }
@@ -55,6 +49,12 @@ func NewClient() *Client {
 // to the client's settings. The caller owns nothing extra; the body is read
 // fully and closed here.
 func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
+	return c.getRaw(ctx, url)
+}
+
+// getRaw fetches url and returns the raw response bytes. This is used for
+// endpoints that return plain text (not JSON), like /tobtc and /q/getblockcount.
+func (c *Client) getRaw(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.Retries; attempt++ {
 		if attempt > 0 {
@@ -123,78 +123,41 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-// Page is the scaffold's one example record: a single page, addressed by the
-// path that names it on blockchain-info.com. It is a stand-in for the typed records you
-// will model from the real blockchain-info endpoints. The kit struct tags make it
-// addressable as a resource URI (see domain.go): ID is the URI id, and Body is
-// the long text `blockchain-info cat` and the Markdown export print.
-type Page struct {
-	ID    string `json:"id" kit:"id"`
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty" kit:"body"`
+// TickerPrice holds the current price for one currency from /ticker.
+type TickerPrice struct {
+	Currency string  `kit:"id" json:"currency"`
+	Last     float64 `json:"last"`
+	Buy      float64 `json:"buy"`
+	Sell     float64 `json:"sell"`
+	Symbol   string  `json:"symbol"`
 }
 
-// GetPage fetches one page by its path (for example "wiki/Go") and returns it as
-// a record. The scaffold keeps a plain-text preview of the response as the body;
-// replace the parsing with the real fields once you know the endpoint's shape.
-func (c *Client) GetPage(ctx context.Context, path string) (*Page, error) {
-	path = strings.Trim(path, "/")
-	url := BaseURL + "/" + path
-	body, err := c.Get(ctx, url)
-	if err != nil {
-		return nil, err
-	}
-	return &Page{ID: path, URL: url, Title: path, Body: pageText(body)}, nil
+// Stats holds network statistics from /stats?format=json.
+type Stats struct {
+	MarketPriceUSD       float64 `kit:"id" json:"market_price_usd"`
+	HashRate             float64 `json:"hash_rate"`
+	TotalBlocksMined     int64   `json:"total_blocks_mined"`
+	TotalBTCMinted       int64   `json:"total_btc_minted_satoshi"`
+	TotalTransactions    int64   `json:"total_transactions"`
+	Difficulty           float64 `json:"difficulty"`
+	MinutesBetweenBlocks float64 `json:"minutes_between_blocks"`
 }
 
-// PageLinks fetches a page and returns the same-host pages it links to, as page
-// stubs. It shows the member-listing pattern the URI driver relies on: every
-// stub carries enough (an id and a URL) to be addressed and followed on its own.
-func (c *Client) PageLinks(ctx context.Context, path string, limit int) ([]*Page, error) {
-	path = strings.Trim(path, "/")
-	body, err := c.Get(ctx, BaseURL+"/"+path)
-	if err != nil {
-		return nil, err
-	}
-	var out []*Page
-	seen := map[string]bool{}
-	for _, p := range linkPaths(body) {
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		out = append(out, &Page{ID: p, URL: BaseURL + "/" + p})
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-	}
-	return out, nil
+// Block holds summary data for one block from /block-height/{height}?format=json.
+type Block struct {
+	Hash       string  `kit:"id" json:"hash"`
+	Height     int     `json:"height"`
+	Time       int64   `json:"time"`
+	TxCount    int     `json:"tx_count"`
+	Size       int     `json:"size"`
+	Difficulty float64 `json:"difficulty"`
+	Nonce      int64   `json:"nonce"`
+	Weight     int     `json:"weight"`
 }
 
-var (
-	hrefRE = regexp.MustCompile(`href="(/[^":#?]+)"`)
-	tagRE  = regexp.MustCompile(`<[^>]+>`)
-)
-
-// linkPaths pulls the relative link targets out of an HTML response, so a list
-// op can turn each into an addressable page stub.
-func linkPaths(body []byte) []string {
-	var out []string
-	for _, m := range hrefRE.FindAllSubmatch(body, -1) {
-		if p := strings.Trim(string(m[1]), "/"); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// pageText reduces an HTML response to a short plain-text preview, a stand-in
-// for the typed extract a real endpoint would hand you.
-func pageText(body []byte) string {
-	s := strings.Join(strings.Fields(tagRE.ReplaceAllString(string(body), " ")), " ")
-	if len(s) > 500 {
-		s = s[:500]
-	}
-	return s
+// Conversion holds the result of converting a fiat amount to BTC.
+type Conversion struct {
+	Currency string  `kit:"id" json:"currency"`
+	Value    float64 `json:"fiat_value"`
+	BTC      float64 `json:"btc"`
 }
